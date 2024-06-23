@@ -230,7 +230,7 @@
     }
   });
 
-  app.get('/api/playerscores', authenticateToken, async (req, res) => {
+  app.get('/api/score', authenticateToken, async (req, res) => {
     try {
       const scores = await Score.find({}, { _id: 0 }).lean();
       res.send(scores);

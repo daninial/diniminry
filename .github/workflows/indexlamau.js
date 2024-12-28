@@ -1,4 +1,4 @@
-
+/* 
 const express = require('express');
 const bodyParser = require('body-parser');
 var cors = require('cors');
@@ -323,3 +323,4 @@ app.use((err, req, res, next) => {
   console.error('An error occurred:', err);
   res.status(500).send({ error: 'Internal Server Error' });
 });
+ */

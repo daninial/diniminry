@@ -1,56 +1,36 @@
-const express = require('express');
+const express = require('express'); 
 const bodyParser = require('body-parser');
 var cors = require('cors');
 var jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
 const mongoose = require('mongoose');
+const helmet = require('helmet');  // Add helmet for WAF protection
 require('dotenv').config();  // Load environment variables from .env file
-const { RateLimiterMemory } = require('rate-limit-flexible');
 
 const app = express();
 const port = process.env.PORT || 3000;
 const uri = process.env.MONGODB_URI;
 const jwtSecret = process.env.JWT_SECRET;
 
+app.use(helmet());  // Apply WAF protection using helmet
 app.use(cors());
 app.use(bodyParser.json());
 
-// Create rate limiter
-const rateLimiter = new RateLimiterMemory({
-  points: 5, // 5 requests
-  duration: 1, // per second
-  keyPrefix: 'rlflx'
-});
-
-// Middleware to apply rate limiting
-const rateLimitMiddleware = (req, res, next) => {
-  rateLimiter.consume(req.ip)
-    .then(() => {
-      next();
-    })
-    .catch(() => {
-      res.status(429).send('Too Many Requests');
-    });
-};
-
 // Connect to MongoDB using mongoose
 mongoose.connect(uri, {
-  serverSelectionTimeoutMS: 5000,
-  socketTimeoutMS: 45000,
-}).then(() => {
-  console.log('Connected to MongoDB');
-  
-  // Start the server
-  app.listen(port, () => {
-    console.log(`Server running on port ${port}`);
+    serverSelectionTimeoutMS: 5000,
+    socketTimeoutMS: 45000,
+  }).then(() => {
+    console.log('Connected to MongoDB');
+    
+    // Start the server
+    app.listen(port, () => {
+      console.log(`Server running on port ${port}`);
+    });
+  }).catch(err => {
+    console.error('Failed to connect to MongoDB:', err);
+    process.exit(1);  // Exit process on failure to connect to MongoDB
   });
-}).catch(err => {
-  console.error('Failed to connect to MongoDB:', err);
-  process.exit(1);  // Exit process on failure to connect to MongoDB
-});
-
-// Apply rate limiter middleware to all routes
-app.use(rateLimitMiddleware);
 
 // Define Schemas and Models
 const userSchema = new mongoose.Schema({
@@ -96,12 +76,16 @@ app.post('/api/users/register', async (req, res) => {
   }
 
   try {
+    // Check if user already exists
     const existingUser = await User.findOne({ username });
     if (existingUser) {
       return res.status(400).send({ error: 'User already exists' });
     }
 
+    // Hash password
     const hashedPassword = await bcrypt.hash(password, 10);
+
+    // Create new user
     const newUser = new User({ username, password: hashedPassword });
     await newUser.save();
 
@@ -293,12 +277,14 @@ app.post('/api/submit', authenticateToken, async (req, res) => {
   const { username, answers } = req.body;
 
   try {
+    // Fetch all questions
     const questions = await Question.find({}).lean();
 
     if (questions.length !== answers.length) {
       return res.status(400).send('Number of answers does not match number of questions');
     }
 
+    // Calculate score
     let score = 0;
     for (let i = 0; i < questions.length; i++) {
       if (questions[i].correctAnswer === answers[i]) {
@@ -306,6 +292,7 @@ app.post('/api/submit', authenticateToken, async (req, res) => {
       }
     }
 
+    // Save score to the database
     const newScore = new Score({ username, score });
     await newScore.save();
 

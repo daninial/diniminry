@@ -5,6 +5,7 @@ var jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
 const mongoose = require('mongoose');
 const helmet = require('helmet');  // Add helmet for WAF protection
+const rateLimit = require('express-rate-limit'); // Import express-rate-limit
 require('dotenv').config();  // Load environment variables from .env file
 
 const app = express();
@@ -50,7 +51,7 @@ const scoreSchema = new mongoose.Schema({
     date: { type: Date, default: Date.now },
 });
 
-const User = mongoose.model('User ', userSchema);
+const User = mongoose.model('User  ', userSchema);
 const Question = mongoose.model('Question', questionSchema);
 const Score = mongoose.model('Score', scoreSchema);
 
@@ -85,6 +86,17 @@ const validatePassword = (password) => {
     return null; // Password is valid
 };
 
+// Rate limiting middleware
+const limiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 100, // Limit each IP to 100 requests per windowMs
+    message: 'Too many requests from this IP, please try again later.'
+});
+
+// Apply rate limiting to specific routes
+app.use('/api/users/register', limiter);
+app.use('/api/users/login', limiter);
+
 // User routes
 app.post('/api/users/register', async (req, res) => {
     const { username, password } = req.body;
@@ -100,19 +112,19 @@ app.post('/api/users/register', async (req, res) => {
 
     try {
         // Check if user already exists
-        const existingUser  = await User.findOne({ username });
-        if (existingUser ) {
-            return res.status(400).send({ error: 'User  already exists' });
+        const existingUser   = await User.findOne({ username });
+        if (existingUser  ) {
+            return res.status(400).send({ error: 'User   already exists' });
         }
 
         // Hash password
         const hashedPassword = await bcrypt.hash(password, 10);
 
         // Create new user
-        const newUser  = new User({ username, password: hashedPassword });
-        await newUser .save();
+        const newUser   = new User({ username, password: hashedPassword });
+        await newUser  .save();
 
-        res.status(201).send('User  registered successfully');
+        res.status(201).send('User   registered successfully');
     } catch (error) {
         res.status(400).send('Error registering user');
     }
@@ -149,7 +161,7 @@ app.get('/api/users/:username', authenticateToken, async (req, res) => {
     try {
         const user = await User.findOne({ username });
         if (!user) {
-            return res.status(404).send({ error: 'User  not found' });
+            return res.status(404).send({ error: 'User   not found' });
         }
         res.send(user);
     } catch (error) {
@@ -171,9 +183,9 @@ app.patch('/api/users/:username', authenticateToken, async (req, res) => {
         }
         const result = await User.updateOne({ username }, { $set: update });
         if (result.nModified === 0) {
-            return res.status(404).send({ error: 'User  not found' });
+            return res.status(404).send({ error: 'User   not found' });
         }
-        res.send({ message: 'User  updated successfully' });
+        res.send({ message: 'User   updated successfully' });
     } catch (error) {
         res.status(400).send({ error: error.message });
     }
@@ -185,9 +197,9 @@ app.delete('/api/users/:username', authenticateToken, async (req, res) => {
     try {
         const result = await User.deleteOne({ username });
         if (result.deletedCount === 0) {
-            return res.status(404).send({ error: 'User  not found' });
+            return res.status(404).send({ error: 'User   not found' });
         }
-        res.send({ message: 'User  deleted successfully' });
+        res.send({ message: 'User   deleted successfully' });
     } catch (error) {
         res.status(500).send({ error: 'An error occurred while deleting the user' });
     }

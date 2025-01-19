@@ -4,16 +4,16 @@ var cors = require('cors');
 var jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
 const mongoose = require('mongoose');
-const helmet = require('helmet');  // Add helmet for WAF protection
-const rateLimit = require('express-rate-limit'); // Import express-rate-limit
-require('dotenv').config();  // Load environment variables from .env file
+const helmet = require('helmet');  
+const rateLimit = require('express-rate-limit'); 
+require('dotenv').config();  
 
 const app = express();
 const port = process.env.PORT || 3000;
 const uri = process.env.MONGODB_URI;
 const jwtSecret = process.env.JWT_SECRET;
 
-app.use(helmet());  // Apply WAF protection using helmet
+app.use(helmet());  
 app.use(cors());
 app.use(bodyParser.json());
 
@@ -30,7 +30,7 @@ mongoose.connect(uri, {
     });
 }).catch(err => {
     console.error('Failed to connect to MongoDB:', err);
-    process.exit(1);  // Exit process on failure to connect to MongoDB
+    process.exit(1);  
 });
 
 // Define Schemas and Models
@@ -51,9 +51,12 @@ const scoreSchema = new mongoose.Schema({
     date: { type: Date, default: Date.now },
 });
 
-const User = mongoose.model('User  ', userSchema);
+const User = mongoose.model('User ', userSchema);
 const Question = mongoose.model('Question', questionSchema);
 const Score = mongoose.model('Score', scoreSchema);
+
+// Store for tracking login attempts
+const loginAttempts = {};
 
 // Middleware for authentication
 const authenticateToken = (req, res, next) => {
@@ -112,19 +115,19 @@ app.post('/api/users/register', async (req, res) => {
 
     try {
         // Check if user already exists
-        const existingUser   = await User.findOne({ username });
-        if (existingUser  ) {
-            return res.status(400).send({ error: 'User   already exists' });
+        const existingUser  = await User.findOne({ username });
+        if (existingUser ) {
+            return res.status(400).send({ error: 'User  already exists' });
         }
 
         // Hash password
         const hashedPassword = await bcrypt.hash(password, 10);
 
         // Create new user
-        const newUser   = new User({ username, password: hashedPassword });
-        await newUser  .save();
+        const newUser  = new User({ username, password: hashedPassword });
+        await newUser .save();
 
-        res.status(201).send('User   registered successfully');
+        res.status(201).send('User  registered successfully');
     } catch (error) {
         res.status(400).send('Error registering user');
     }
@@ -137,71 +140,32 @@ app.post('/api/users/login', async (req, res) => {
         return res.status(400).send({ error: 'Username and password are required' });
     }
 
-    const passwordError = validatePassword(password);
-    if (passwordError) {
-        return res.status(400).send({ error: passwordError });
+    // Check if the user is locked out
+    const attempts = loginAttempts[username] || { count: 0, lastAttempt: null };
+    const lockoutTime = 5 * 60 * 1000; // 5 minutes
+
+    if (attempts.count >= 2 && attempts.lastAttempt && (Date.now() - attempts.lastAttempt < lockoutTime)) {
+        return res.status(403).send({ error: 'Too many failed login attempts. Please try again later.' });
     }
 
     try {
         const user = await User.findOne({ username });
         if (!user || !(await bcrypt.compare(password, user.password))) {
+            // Increment the failed login attempt count
+            attempts.count += 1;
+            attempts.lastAttempt = Date.now();
+            loginAttempts[username] = attempts;
+
             return res.status(401).send({ error: 'Invalid credentials' });
         }
+
+        // Reset the attempts on successful login
+        loginAttempts[username] = { count: 0, lastAttempt: null };
 
         const token = jwt.sign({ username: user.username }, jwtSecret, { expiresIn: '1h' });
         res.json({ token });
     } catch (error) {
         res.status(500).send({ error: 'An error occurred during login' });
-    }
-});
-
-app.get('/api/users/:username', authenticateToken, async (req, res) => {
-    const username = req.params.username;
-
-    try {
-        const user = await User.findOne({ username });
-        if (!user) {
-            return res.status(404).send({ error: 'User   not found' });
-        }
-        res.send(user);
-    } catch (error) {
-        res.status(500).send({ error: 'An error occurred while fetching the user' });
-    }
-});
-
-app.patch('/api/users/:username', authenticateToken, async (req, res) => {
-    const { username } = req.params;
-    const update = req.body;
-
-    try {
-        if (update.password) {
-            const passwordError = validatePassword(update.password);
-            if (passwordError) {
-                return res.status(400).send({ error: passwordError });
-            }
-            update.password = await bcrypt.hash(update.password, 10);
-        }
-        const result = await User.updateOne({ username }, { $set: update });
-        if (result.nModified === 0) {
-            return res.status(404).send({ error: 'User   not found' });
-        }
-        res.send({ message: 'User   updated successfully' });
-    } catch (error) {
-        res.status(400).send({ error: error.message });
-    }
-});
-
-app.delete('/api/users/:username', authenticateToken, async (req, res) => {
-    const username = req.params.username;
-
-    try {
-        const result = await User.deleteOne({ username });
-        if (result.deletedCount === 0) {
-            return res.status(404).send({ error: 'User   not found' });
-        }
-        res.send({ message: 'User   deleted successfully' });
-    } catch (error) {
-        res.status(500).send({ error: 'An error occurred while deleting the user' });
     }
 });
 
@@ -276,7 +240,7 @@ app.post('/api/scores', authenticateToken, async (req, res) => {
     }
 });
 
-app.get('/api/score', authenticateToken, async (req, res) => {
+app.get('/api/scores', authenticateToken, async (req, res) => {
     try {
         const scores = await Score.find({}, { _id: 0 }).lean();
         res.send(scores);

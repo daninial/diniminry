@@ -11,7 +11,7 @@ const app = express();
 const port = process.env.PORT || 3000;
 const uri = process.env.MONGODB_URI;
 const jwtSecret = process.env.JWT_SECRET;
-console.log("hello")
+
 app.use(helmet());  // Apply WAF protection using helmet
 app.use(cors());
 app.use(bodyParser.json());

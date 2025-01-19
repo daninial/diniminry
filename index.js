@@ -67,6 +67,24 @@ const authenticateToken = (req, res, next) => {
     });
 };
 
+// Password validation function
+const validatePassword = (password) => {
+    const hasUpperCase = /[A-Z]/.test(password);
+    const hasSymbol = /[!@#$%^&*]/.test(password);
+    const isValidLength = password.length >= 6;
+
+    if (!isValidLength) {
+        return 'Password must be at least 6 characters long.';
+    }
+    if (!hasUpperCase) {
+        return 'Password must contain at least one uppercase letter.';
+    }
+    if (!hasSymbol) {
+        return 'Password must contain at least one symbol.';
+    }
+    return null; // Password is valid
+};
+
 // User routes
 app.post('/api/users/register', async (req, res) => {
     const { username, password } = req.body;
@@ -75,11 +93,9 @@ app.post('/api/users/register', async (req, res) => {
         return res.status(400).send({ error: 'Username and password are required' });
     }
 
-    // Password validation regex: at least 6 characters, at least one uppercase letter, and at least one symbol
-    const passwordRegex = /^(?=.*[A-Z])(?=.*[!@#$%^&*])[A-Za-z\d!@#$%^&*]{6,}$/;
-
-    if (!passwordRegex.test(password)) {
-        return res.status(400).send({ error: 'Password must be at least 6 characters long, contain at least one uppercase letter and one symbol.' });
+    const passwordError = validatePassword(password);
+    if (passwordError) {
+        return res.status(400).send({ error: passwordError });
     }
 
     try {
@@ -107,6 +123,11 @@ app.post('/api/users/login', async (req, res) => {
 
     if (!username || !password) {
         return res.status(400).send({ error: 'Username and password are required' });
+    }
+
+    const passwordError = validatePassword(password);
+    if (passwordError) {
+        return res.status(400).send({ error: passwordError });
     }
 
     try {
@@ -142,6 +163,10 @@ app.patch('/api/users/:username', authenticateToken, async (req, res) => {
 
     try {
         if (update.password) {
+            const passwordError = validatePassword(update.password);
+            if (passwordError) {
+                return res.status(400).send({ error: passwordError });
+            }
             update.password = await bcrypt.hash(update.password, 10);
         }
         const result = await User.updateOne({ username }, { $set: update });

@@ -37,6 +37,7 @@ mongoose.connect(uri, {
 const userSchema = new mongoose.Schema({
     username: { type: String, unique: true, required: true },
     password: { type: String, required: true },
+    banned: { type: Boolean, default: false } // New field to track if the user is banned
 });
 
 const questionSchema = new mongoose.Schema({
@@ -144,17 +145,33 @@ app.post('/api/users/login', async (req, res) => {
     const attempts = loginAttempts[username] || { count: 0, lastAttempt: null };
     const lockoutTime = 5 * 60 * 1000; // 5 minutes
 
-    if (attempts.count >= 2 && attempts.lastAttempt && (Date.now() - attempts.lastAttempt < lockoutTime)) {
-        return res.status(403).send({ error: 'Too many failed login attempts. Please try again later.' });
+    // Check if the user is locked out
+    if (attempts.count >= 3 && attempts.lastAttempt && (Date.now() - attempts.lastAttempt < lockoutTime)) {
+        return res.status(403).send({ error: 'You need to wait for 5 minutes before trying again.' });
     }
 
     try {
         const user = await User.findOne({ username });
+        
+        // Check if the user is banned
+        if (user && user.banned) {
+            return res.status(403).send({ error: 'This account is banned. You have been banned after multiple failed login attempts.' });
+        }
+
         if (!user || !(await bcrypt.compare(password, user.password))) {
             // Increment the failed login attempt count
             attempts.count += 1;
             attempts.lastAttempt = Date.now();
             loginAttempts[username] = attempts;
+
+            // Ban the user after 3 failed attempts
+            if (attempts.count >= 3) {
+                if (user) {
+                    user.banned = true; // Ban the user
+                    await user.save();
+                }
+                return res.status(403).send({ error: 'You have been banned after multiple failed login attempts.' });
+            }
 
             return res.status(401).send({ error: 'Invalid credentials' });
         }

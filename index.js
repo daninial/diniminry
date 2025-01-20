@@ -17,7 +17,11 @@ app.use(helmet());
 app.use(cors());
 app.use(bodyParser.json());
 
+const credentials = process.env.CERT_PATH;
+
+
 // Connect to MongoDB using mongoose
+
 mongoose.connect(uri, {
     serverSelectionTimeoutMS: 5000,
     socketTimeoutMS: 45000,

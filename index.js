@@ -38,7 +38,9 @@ const userSchema = new mongoose.Schema({
     username: { type: String, unique: true, required: true },
     password: { type: String, required: true },
     banned: { type: Boolean, default: false },
-    role: { type: String, default: 'user' } // New field for user role
+    role: { type: String, default: 'user' }, // New field for user role
+    loginAttempts: { type: Number, default: 0 }, // Track failed login attempts
+    lastAttempt: { type: Date } // Track the last login attempt time
 });
 
 const questionSchema = new mongoose.Schema({
@@ -155,9 +157,36 @@ app.post('/api/users/login', async (req, res) => {
 
     try {
         const user = await User.findOne({ username });
-        if (!user || !(await bcrypt.compare(password, user.password))) {
+
+        // Check if user exists
+        if (!user) {
             return res.status(401).send({ error: 'Invalid credentials' });
         }
+
+        // Check if the user is locked out
+        const now = new Date();
+        if (user.loginAttempts >= 3) {
+            const waitTime = 5 * 60 * 1000; // 5 minutes in milliseconds
+            if (now - user.lastAttempt < waitTime) {
+                return res.status(403).send({ error: 'Too many failed attempts. Please wait 5 minutes.' });
+            } else {
+                // Reset attempts after waiting period
+                user.loginAttempts = 0;
+            }
+        }
+
+        // Check password
+        if (!(await bcrypt.compare(password, user.password))) {
+            user.loginAttempts += 1; // Increment login attempts
+            user.lastAttempt = now; // Update last attempt time
+            await user.save(); // Save user data
+            return res.status(401).send({ error: 'Invalid credentials' });
+        }
+
+        // Successful login
+        user.loginAttempts = 0; // Reset attempts on successful login
+        user.lastAttempt = null; // Clear last attempt time
+        await user.save(); // Save user data
 
         const token = jwt.sign({ username: user.username, role: user.role }, jwtSecret, { expiresIn: '1h' });
         res.json({ token });

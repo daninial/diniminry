@@ -23,9 +23,6 @@ mongoose.connect(uri, {
     socketTimeoutMS: 45000,
 }).then(() => {
     console.log('Connected to MongoDB');
-    
-    // Create admin user if it doesn't exist
-    createAdminUser ();
 
     // Start the server
     app.listen(port, () => {
@@ -61,7 +58,7 @@ const scoreSchema = new mongoose.Schema({
     date: { type: Date, default: Date.now },
 });
 
-const User = mongoose.model('User ', userSchema); // Fixed model name
+const User = mongoose.model('User ', userSchema);
 const Question = mongoose.model('Question', questionSchema);
 const Score = mongoose.model('Score', scoreSchema);
 
@@ -115,35 +112,9 @@ const limiter = rateLimit({
 app.use('/api/users/register', limiter);
 app.use('/api/users/login', limiter);
 
-// Create admin user function
-const createAdminUser  = async () => {
-    const adminUsername = 'admin'; // Set your admin username
-    const adminPassword = 'Admin@123'; // Set your admin password
-
-    try {
-        // Check if the admin user already exists
-        const existingAdmin = await User.findOne({ username: adminUsername });
-        if (existingAdmin) {
-            console.log('Admin user already exists.');
-            return;
-        }
-
-        // Hash the admin password
-        const hashedPassword = await bcrypt.hash(adminPassword, 12);
-
-        // Create the admin user
-        const adminUser  = new User({ username: adminUsername, password: hashedPassword, role: 'admin' });
-        await adminUser .save();
-
-        console.log('Admin user created successfully.');
-    } catch (error) {
-        console.error('Error creating admin user:', error);
-    }
-};
-
-// User routes
+// User registration route
 app.post('/api/users/register', async (req, res) => {
-    const { username, password, isAdmin } = req.body; // Accept isAdmin in the request body
+    const { username, password } = req.body;
 
     if (!username || !password) {
         return res.status(400).send({ error: 'Username and password are required' });
@@ -162,11 +133,10 @@ app.post('/api/users/register', async (req, res) => {
         }
 
         // Hash password
-        const hashedPassword = await bcrypt.hash(password, 12); // Increased salt rounds
-        const role = isAdmin ? 'admin' : 'user'; // Set role based on isAdmin
+        const hashedPassword = await bcrypt.hash(password, 12);
 
         // Create new user
-        const newUser  = new User({ username, password: hashedPassword, role });
+        const newUser  = new User({ username, password: hashedPassword, role: 'user' });
         await newUser .save();
 
         res.status(201).send('User  registered successfully');
@@ -175,6 +145,7 @@ app.post('/api/users/register', async (req, res) => {
     }
 });
 
+// User login route
 app.post('/api/users/login', async (req, res) => {
     const { username, password } = req.body;
 
@@ -241,27 +212,44 @@ app.delete('/api/users/:username', authenticateToken, authorizeAdmin, async (req
 });
 
 // Score routes
-app.post('/api/scores', authenticateToken, authorizeAdmin, async (req, res) => {
+app.post('/api/scores', authenticateToken, async (req, res) => {
     const { username, score } = req.body;
 
     try {
         const newScore = new Score({ username, score });
-        const result = await newScore.save();
-        res.status(201).send({ scoreId: result._id });
+        await newScore.save();
+        res.status(201).send({ scoreId: newScore._id });
     } catch (error) {
         res.status(500).send({ error: 'An error occurred while saving the score' });
     }
 });
 
-app.get('/api/scores', authenticateToken, authorizeAdmin, async (req, res) => {
+// Admin route to get all players' scores
+app.get('/api/admin/scores', authenticateToken, authorizeAdmin, async (req, res) => {
     try {
-        const scores = await Score.find({}).lean();
-        res.send(scores);
+        const scores = await Score.find(); // Fetch all scores from the database
+        res.status(200).json(scores); // Send the score data as a response
     } catch (error) {
-        res.status(500).send({ error: 'An error occurred while fetching the scores' });
+        res.status(500).json({ message: 'Error retrieving scores' });
     }
 });
 
+// Player route to get their own score
+app.get('/api/scores/me', authenticateToken, async (req, res) => {
+    const username = req.user.username; // Get the username from the token
+
+    try {
+        const score = await Score.findOne({ username });
+        if (!score) {
+            return res.status(404).send({ error: 'Score not found' });
+        }
+        res.send(score);
+    } catch (error) {
+        res.status(500).send({ error: 'An error occurred while fetching the score' });
+    }
+});
+
+// Update and delete score routes for admin
 app.patch('/api/scores/:username', authenticateToken, authorizeAdmin, async (req, res) => {
     const username = req.params.username;
     const { score } = req.body;

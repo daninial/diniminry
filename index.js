@@ -1,7 +1,7 @@
 const express = require('express'); 
 const bodyParser = require('body-parser');
-var cors = require('cors');
-var jwt = require('jsonwebtoken');
+const cors = require('cors');
+const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
 const mongoose = require('mongoose');
 const helmet = require('helmet');  
@@ -24,6 +24,9 @@ mongoose.connect(uri, {
 }).then(() => {
     console.log('Connected to MongoDB');
     
+    // Create admin user if it doesn't exist
+    createAdminUser ();
+
     // Start the server
     app.listen(port, () => {
         console.log(`Server running on port ${port}`);
@@ -37,13 +40,19 @@ mongoose.connect(uri, {
 const userSchema = new mongoose.Schema({
     username: { type: String, unique: true, required: true },
     password: { type: String, required: true },
-    banned: { type: Boolean, default: false } // New field to track if the user is banned
+    banned: { type: Boolean, default: false },
+    role: { type: String, default: 'user' } // New field for user role
 });
 
 const questionSchema = new mongoose.Schema({
     question: { type: String, required: true },
-    options: { type: [String], required: true },
-    correctAnswer: { type: String, required: true },
+    options: { 
+        a: { type: String, required: true },
+        b: { type: String, required: true },
+        c: { type: String, required: true },
+        d: { type: String, required: true }
+    },
+    correctAnswer: { type: String, required: true } // Should be 'a', 'b', 'c', or 'd'
 });
 
 const scoreSchema = new mongoose.Schema({
@@ -52,12 +61,9 @@ const scoreSchema = new mongoose.Schema({
     date: { type: Date, default: Date.now },
 });
 
-const User = mongoose.model('User ', userSchema);
+const User = mongoose.model('User ', userSchema); // Fixed model name
 const Question = mongoose.model('Question', questionSchema);
 const Score = mongoose.model('Score', scoreSchema);
-
-// Store for tracking login attempts
-const loginAttempts = {};
 
 // Middleware for authentication
 const authenticateToken = (req, res, next) => {
@@ -70,6 +76,14 @@ const authenticateToken = (req, res, next) => {
         req.user = user;
         next();
     });
+};
+
+// Admin Authorization Middleware
+const authorizeAdmin = (req, res, next) => {
+    if (req.user.role !== 'admin') {
+        return res.status(403).send({ error: 'Access denied. Admins only.' });
+    }
+    next();
 };
 
 // Password validation function
@@ -101,9 +115,35 @@ const limiter = rateLimit({
 app.use('/api/users/register', limiter);
 app.use('/api/users/login', limiter);
 
+// Create admin user function
+const createAdminUser  = async () => {
+    const adminUsername = 'admin'; // Set your admin username
+    const adminPassword = 'Admin@123'; // Set your admin password
+
+    try {
+        // Check if the admin user already exists
+        const existingAdmin = await User.findOne({ username: adminUsername });
+        if (existingAdmin) {
+            console.log('Admin user already exists.');
+            return;
+        }
+
+        // Hash the admin password
+        const hashedPassword = await bcrypt.hash(adminPassword, 12);
+
+        // Create the admin user
+        const adminUser  = new User({ username: adminUsername, password: hashedPassword, role: 'admin' });
+        await adminUser .save();
+
+        console.log('Admin user created successfully.');
+    } catch (error) {
+        console.error('Error creating admin user:', error);
+    }
+};
+
 // User routes
 app.post('/api/users/register', async (req, res) => {
-    const { username, password } = req.body;
+    const { username, password, isAdmin } = req.body; // Accept isAdmin in the request body
 
     if (!username || !password) {
         return res.status(400).send({ error: 'Username and password are required' });
@@ -122,10 +162,11 @@ app.post('/api/users/register', async (req, res) => {
         }
 
         // Hash password
-        const hashedPassword = await bcrypt.hash(password, 10);
+        const hashedPassword = await bcrypt.hash(password, 12); // Increased salt rounds
+        const role = isAdmin ? 'admin' : 'user'; // Set role based on isAdmin
 
         // Create new user
-        const newUser  = new User({ username, password: hashedPassword });
+        const newUser  = new User({ username, password: hashedPassword, role });
         await newUser .save();
 
         res.status(201).send('User  registered successfully');
@@ -141,53 +182,117 @@ app.post('/api/users/login', async (req, res) => {
         return res.status(400).send({ error: 'Username and password are required' });
     }
 
-    // Check if the user is locked out
-    const attempts = loginAttempts[username] || { count: 0, lastAttempt: null };
-    const lockoutTime = 5 * 60 * 1000; // 5 minutes
-
-    // Check if the user is locked out
-    if (attempts.count >= 3 && attempts.lastAttempt && (Date.now() - attempts.lastAttempt < lockoutTime)) {
-        return res.status(403).send({ error: 'You need to wait for 5 minutes before trying again.' });
-    }
-
     try {
         const user = await User.findOne({ username });
-        
-        // Check if the user is banned
-        if (user && user.banned) {
-            return res.status(403).send({ error: 'This account is banned. You have been banned after multiple failed login attempts.' });
-        }
-
         if (!user || !(await bcrypt.compare(password, user.password))) {
-            // Increment the failed login attempt count
-            attempts.count += 1;
-            attempts.lastAttempt = Date.now();
-            loginAttempts[username] = attempts;
-
-            // Ban the user after 3 failed attempts
-            if (attempts.count >= 3) {
-                if (user) {
-                    user.banned = true; // Ban the user
-                    await user.save();
-                }
-                return res.status(403).send({ error: 'You have been banned after multiple failed login attempts.' });
-            }
-
             return res.status(401).send({ error: 'Invalid credentials' });
         }
 
-        // Reset the attempts on successful login
-        loginAttempts[username] = { count: 0, lastAttempt: null };
-
-        const token = jwt.sign({ username: user.username }, jwtSecret, { expiresIn: '1h' });
+        const token = jwt.sign({ username: user.username, role: user.role }, jwtSecret, { expiresIn: '1h' });
         res.json({ token });
     } catch (error) {
         res.status(500).send({ error: 'An error occurred during login' });
     }
 });
 
+// User details route (GET)
+app.get('/api/users/:username', authenticateToken, authorizeAdmin, async (req, res) => {
+    const { username } = req.params;
+
+    try {
+        const user = await User.findOne({ username }, { password: 0 }); // Exclude password
+        if (!user) {
+            return res.status(404).send({ error: 'User  not found' });
+        }
+        res.send(user);
+    } catch (error) {
+        res.status(500).send({ error: 'An error occurred while fetching user details' });
+    }
+});
+
+// User update and delete routes
+app.patch('/api/users/:username', authenticateToken, authorizeAdmin, async (req, res) => {
+    const { username } = req.params;
+    const updates = req.body;
+
+    try {
+        const result = await User.updateOne({ username }, { $set: updates });
+        if (result.nModified === 0) {
+            return res.status(404).send({ error: 'User  not found' });
+        }
+        res.send({ message: 'User  updated successfully' });
+    } catch (error) {
+        res.status(500).send({ error: 'An error occurred while updating the user' });
+    }
+});
+
+app.delete('/api/users/:username', authenticateToken, authorizeAdmin, async (req, res) => {
+    const { username } = req.params;
+
+    try {
+        const result = await User.deleteOne({ username });
+        if (result.deletedCount === 0) {
+            return res.status(404).send({ error: 'User  not found' });
+        }
+        res.send({ message: 'User  deleted successfully' });
+    } catch (error) {
+        res.status(500).send({ error: 'An error occurred while deleting the user' });
+    }
+});
+
+// Score routes
+app.post('/api/scores', authenticateToken, authorizeAdmin, async (req, res) => {
+    const { username, score } = req.body;
+
+    try {
+        const newScore = new Score({ username, score });
+        const result = await newScore.save();
+        res.status(201).send({ scoreId: result._id });
+    } catch (error) {
+        res.status(500).send({ error: 'An error occurred while saving the score' });
+    }
+});
+
+app.get('/api/scores', authenticateToken, authorizeAdmin, async (req, res) => {
+    try {
+        const scores = await Score.find({}).lean();
+        res.send(scores);
+    } catch (error) {
+        res.status(500).send({ error: 'An error occurred while fetching the scores' });
+    }
+});
+
+app.patch('/api/scores/:username', authenticateToken, authorizeAdmin, async (req, res) => {
+    const username = req.params.username;
+    const { score } = req.body;
+
+    try {
+        const result = await Score.updateOne({ username }, { $set: { score } });
+        if (result.nModified === 0) {
+            return res.status(404).send({ error: 'Score not found' });
+        }
+        res.send({ message: 'Score updated successfully' });
+    } catch (error) {
+        res.status(500).send({ error: 'An error occurred while updating the score' });
+    }
+});
+
+app.delete('/api/scores/:username', authenticateToken, authorizeAdmin, async (req, res) => {
+    const username = req.params.username;
+
+    try {
+        const result = await Score.deleteOne({ username });
+        if (result.deletedCount === 0) {
+            return res.status(404).send({ error: 'Score not found' });
+        }
+        res.send({ message: 'Score deleted successfully' });
+    } catch (error) {
+        res.status(500).send({ error: 'An error occurred while deleting the score' });
+    }
+});
+
 // Question routes
-app.post('/api/questions', authenticateToken, async (req, res) => {
+app.post('/api/questions', authenticateToken, authorizeAdmin, async (req, res) => {
     const { question, options, correctAnswer } = req.body;
 
     try {
@@ -208,7 +313,7 @@ app.get('/api/questions', authenticateToken, async (req, res) => {
     }
 });
 
-app.patch('/api/questions/:id', authenticateToken, async (req, res) => {
+app.patch('/api/questions/:id', authenticateToken, authorizeAdmin, async (req, res) => {
     const questionId = req.params.id;
     const { question, options, correctAnswer } = req.body;
 
@@ -228,7 +333,7 @@ app.patch('/api/questions/:id', authenticateToken, async (req, res) => {
     }
 });
 
-app.delete('/api/questions/:id', authenticateToken, async (req, res) => {
+app.delete('/api/questions/:id', authenticateToken, authorizeAdmin, async (req, res) => {
     const questionId = req.params.id;
 
     try {
@@ -241,89 +346,6 @@ app.delete('/api/questions/:id', authenticateToken, async (req, res) => {
         res.send({ message: 'Question deleted successfully' });
     } catch (error) {
         res.status(500).send({ error: 'An error occurred while deleting the question' });
-    }
-});
-
-// Score routes
-app.post('/api/scores', authenticateToken, async (req, res) => {
-    const { username, score } = req.body;
-
-    try {
-        const newScore = new Score({ username, score });
-        const result = await newScore.save();
-        res.status(201).send({ scoreId: result._id });
-    } catch (error) {
-        res.status(500).send({ error: 'An error occurred while saving the score' });
-    }
-});
-
-app.get('/api/scores', authenticateToken, async (req, res) => {
-    try {
-        const scores = await Score.find({}, { _id: 0 }).lean();
-        res.send(scores);
-    } catch (error) {
-        res.status(500).send({ error: 'An error occurred while fetching the scores' });
-    }
-});
-
-app.patch('/api/scores/:username', authenticateToken, async (req, res) => {
-    const username = req.params.username;
-    const { score } = req.body;
-
-    try {
-        const result = await Score.updateOne({ username }, { $set: { score } });
-        if (result.nModified === 0) {
-            return res.status(404).send({ error: 'Score not found' });
-        }
-        res.send({ message: 'Score updated successfully' });
-    } catch (error) {
-        res.status(500).send({ error: 'An error occurred while updating the score' });
-    }
-});
-
-app.delete('/api/scores/:username', authenticateToken, async (req, res) => {
-    const username = req.params.username;
-
-    try {
-        const result = await Score.deleteOne({ username });
-
-        if (result.deletedCount === 0) {
-            return res.status(404).send({ error: 'Score not found' });
-        }
-
-        res.send({ message: 'Score deleted successfully' });
-    } catch (error) {
-        res.status(500).send({ error: 'An error occurred while deleting the score' });
-    }
-});
-
-// Submit answers route
-app.post('/api/submit', authenticateToken, async (req, res) => {
-    const { username, answers } = req.body;
-
-    try {
-        // Fetch all questions
-        const questions = await Question.find({}).lean();
-
-        if (questions.length !== answers.length) {
-            return res.status(400).send('Number of answers does not match number of questions');
-        }
-
-        // Calculate score
-        let score = 0;
-        for (let i = 0; i < questions.length; i++) {
-            if (questions[i].correctAnswer === answers[i]) {
-                score++;
-            }
-        }
-
-        // Save score to the database
-        const newScore = new Score({ username, score });
-        await newScore.save();
-
-        res.status(201).send({ message: 'Score submitted successfully', score });
-    } catch (error) {
-        res.status(500).send({ error: 'An error occurred while submitting the answers' });
     }
 });
 

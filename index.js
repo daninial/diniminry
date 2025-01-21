@@ -107,7 +107,7 @@ const validatePassword = (password) => {
 // Rate limiting middleware
 const limiter = rateLimit({
     windowMs: 15 * 60 * 1000, 
-    max: 100, 
+    max: 5, 
     message: 'Too many requests from this IP, please try again later.'
 });
 
@@ -180,7 +180,7 @@ app.post('/api/users/login', async (req, res) => {
         user.lastAttempt = null;
         await user.save();
 
-        const token = jwt.sign({ username: user.username, role: user.role }, jwtSecret, { expiresIn: '1h' });
+        const token = jwt.sign({ username: user.username, role: user.role }, jwtSecret, { expiresIn: '5m' });
         res.json({ token });
     } catch (error) {
         res.status(500).send({ error: 'An error occurred during login' });

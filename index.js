@@ -1,4 +1,5 @@
-const express = require('express'); 
+const credentials = process.env.CERT_PATH;
+const express = require('express');  
 const bodyParser = require('body-parser');
 const cors = require('cors');
 const jwt = require('jsonwebtoken');
@@ -17,11 +18,7 @@ app.use(helmet());
 app.use(cors());
 app.use(bodyParser.json());
 
-const credentials = process.env.CERT_PATH;
-
-
 // Connect to MongoDB using mongoose
-
 mongoose.connect(uri, {
     serverSelectionTimeoutMS: 5000,
     socketTimeoutMS: 45000,
@@ -42,9 +39,9 @@ const userSchema = new mongoose.Schema({
     username: { type: String, unique: true, required: true },
     password: { type: String, required: true },
     banned: { type: Boolean, default: false },
-    role: { type: String, default: 'user' }, // New field for user role
-    loginAttempts: { type: Number, default: 0 }, // Track failed login attempts
-    lastAttempt: { type: Date } // Track the last login attempt time
+    role: { type: String, default: 'user' },
+    loginAttempts: { type: Number, default: 0 },
+    lastAttempt: { type: Date } 
 });
 
 const questionSchema = new mongoose.Schema({
@@ -55,7 +52,7 @@ const questionSchema = new mongoose.Schema({
         c: { type: String, required: true },
         d: { type: String, required: true }
     },
-    correctAnswer: { type: String, required: true } // Should be 'a', 'b', 'c', or 'd'
+    correctAnswer: { type: String, required: true }
 });
 
 const scoreSchema = new mongoose.Schema({
@@ -74,7 +71,7 @@ const authenticateToken = (req, res, next) => {
     const token = authHeader && authHeader.split(' ')[1];
     if (!token) return res.sendStatus(401);
 
-    jwt.verify(token, jwtSecret, (err, user) => {
+    jwt.verify(token, jwtSecret, { algorithms: ['HS256'] }, (err, user) => {
         if (err) return res.sendStatus(403);
         req.user = user;
         next();
@@ -104,13 +101,13 @@ const validatePassword = (password) => {
     if (!hasSymbol) {
         return 'Password must contain at least one symbol.';
     }
-    return null; // Password is valid
+    return null; 
 };
 
 // Rate limiting middleware
 const limiter = rateLimit({
-    windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 100, // Limit each IP to 100 requests per windowMs
+    windowMs: 15 * 60 * 1000, 
+    max: 100, 
     message: 'Too many requests from this IP, please try again later.'
 });
 
@@ -132,16 +129,12 @@ app.post('/api/users/register', async (req, res) => {
     }
 
     try {
-        // Check if user already exists
         const existingUser  = await User.findOne({ username });
         if (existingUser ) {
             return res.status(400).send({ error: 'User  already exists' });
         }
 
-        // Hash password
         const hashedPassword = await bcrypt.hash(password, 12);
-
-        // Create new user
         const newUser  = new User({ username, password: hashedPassword, role: 'user' });
         await newUser .save();
 
@@ -162,35 +155,30 @@ app.post('/api/users/login', async (req, res) => {
     try {
         const user = await User.findOne({ username });
 
-        // Check if user exists
         if (!user) {
             return res.status(401).send({ error: 'Invalid credentials' });
         }
 
-        // Check if the user is locked out
         const now = new Date();
         if (user.loginAttempts >= 3) {
-            const waitTime = 5 * 60 * 1000; // 5 minutes in milliseconds
+            const waitTime = 5 * 60 * 1000;
             if (now - user.lastAttempt < waitTime) {
                 return res.status(403).send({ error: 'Too many failed attempts. Please wait 5 minutes.' });
             } else {
-                // Reset attempts after waiting period
                 user.loginAttempts = 0;
             }
         }
 
-        // Check password
         if (!(await bcrypt.compare(password, user.password))) {
-            user.loginAttempts += 1; // Increment login attempts
-            user.lastAttempt = now; // Update last attempt time
-            await user.save(); // Save user data
+            user.loginAttempts += 1;
+            user.lastAttempt = now;
+            await user.save();
             return res.status(401).send({ error: 'Invalid credentials' });
         }
 
-        // Successful login
-        user.loginAttempts = 0; // Reset attempts on successful login
-        user.lastAttempt = null; // Clear last attempt time
-        await user.save(); // Save user data
+        user.loginAttempts = 0;
+        user.lastAttempt = null;
+        await user.save();
 
         const token = jwt.sign({ username: user.username, role: user.role }, jwtSecret, { expiresIn: '1h' });
         res.json({ token });
@@ -200,11 +188,11 @@ app.post('/api/users/login', async (req, res) => {
 });
 
 // User details route (GET)
-app.get('/api/users/:username', authenticateToken, authorizeAdmin, async (req, res) => {
-    const { username } = req.params;
+app.get('/api/users/me', authenticateToken, async (req, res) => {
+    const username = req.user.username;
 
     try {
-        const user = await User.findOne({ username }, { password: 0 }); // Exclude password
+        const user = await User.findOne({ username }, { password: 0 });
         if (!user) {
             return res.status(404).send({ error: 'User  not found' });
         }
@@ -214,54 +202,94 @@ app.get('/api/users/:username', authenticateToken, authorizeAdmin, async (req, r
     }
 });
 
-// User update and delete routes
-app.patch('/api/users/:username', authenticateToken, authorizeAdmin, async (req, res) => {
-    const { username } = req.params;
-    const updates = req.body;
+// User update route for password
+app.patch('/api/users/me', authenticateToken, async (req, res) => {
+    const { username, oldPassword, newPassword } = req.body;
+
+    if (!username || !oldPassword || !newPassword) {
+        return res.status(400).send({ error: 'Username, old password, and new password are required' });
+    }
 
     try {
-        const result = await User.updateOne({ username }, { $set: updates });
-        if (result.nModified === 0) {
+        const user = await User.findOne({ username });
+
+        if (!user) {
             return res.status(404).send({ error: 'User  not found' });
         }
-        res.send({ message: 'User  updated successfully' });
-    } catch (error) {
-        res.status(500).send({ error: 'An error occurred while updating the user' });
-    }
-});
 
-app.delete('/api/users/:username', authenticateToken, authorizeAdmin, async (req, res) => {
-    const { username } = req.params;
-
-    try {
-        const result = await User.deleteOne({ username });
-        if (result.deletedCount === 0) {
-            return res.status(404).send({ error: 'User  not found' });
+        const now = new Date();
+        if (user.loginAttempts >= 3) {
+            const waitTime = 5 * 60 * 1000; // 5 minutes
+            if (now - user.lastAttempt < waitTime) {
+                return res.status(403).send({ error: 'Account is temporarily banned. Please wait 5 minutes.' });
+            } else {
+                user.loginAttempts = 0; // Reset attempts after the wait time
+            }
         }
-        res.send({ message: 'User  deleted successfully' });
+
+        // Check if the old password is correct
+        const isOldPasswordCorrect = await bcrypt.compare(oldPassword, user.password);
+        if (!isOldPasswordCorrect) {
+            user.loginAttempts += 1;
+            user.lastAttempt = now;
+            await user.save();
+            return res.status(401).send({ error: 'Old password is incorrect' });
+        }
+
+        // Reset login attempts on successful old password verification
+        user.loginAttempts = 0;
+        user.lastAttempt = null;
+
+        // Validate the new password
+        const passwordError = validatePassword(newPassword);
+        if (passwordError) {
+            return res.status(400).send({ error: passwordError });
+        }
+
+        // Hash the new password and update it
+        const hashedPassword = await bcrypt.hash(newPassword, 12);
+        await User.updateOne({ username }, { $set: { password: hashedPassword } });
+        res.send({ message: 'Password updated successfully' });
     } catch (error) {
-        res.status(500).send({ error: 'An error occurred while deleting the user' });
+        res.status(500).send({ error: 'An error occurred while updating the password' });
     }
 });
 
-// Score routes
-app.post('/api/scores', authenticateToken, async (req, res) => {
-    const { username, score } = req.body;
+// Submit answers route
+app.post('/api/submit', authenticateToken, async (req, res) => {
+    const { username, answers } = req.body;
 
     try {
-        const newScore = new Score({ username, score });
-        await newScore.save();
-        res.status(201).send({ scoreId: newScore._id });
+      // Fetch all questions
+      const questions = await Question.find({}).lean();
+
+      if (questions.length !== answers.length) {
+        return res.status(400).send('Number of answers does not match number of questions');
+      }
+
+      // Calculate score
+      let score = 0;
+      for (let i = 0; i < questions.length; i++) {
+        if (questions[i].correctAnswer === answers[i]) {
+          score++;
+        }
+      }
+
+      // Save score to the database
+      const newScore = new Score({ username, score });
+      await newScore.save();
+
+      res.status(201).send({ message: 'Score submitted successfully', score });
     } catch (error) {
-        res.status(500).send({ error: 'An error occurred while saving the score' });
+      res.status(500).send({ error: 'An error occurred while submitting the answers' });
     }
-});
+  });
 
 // Admin route to get all players' scores
 app.get('/api/admin/scores', authenticateToken, authorizeAdmin, async (req, res) => {
     try {
-        const scores = await Score.find(); // Fetch all scores from the database
-        res.status(200).json(scores); // Send the score data as a response
+        const scores = await Score.find();
+        res.status(200).json(scores);
     } catch (error) {
         res.status(500).json({ message: 'Error retrieving scores' });
     }
@@ -269,7 +297,7 @@ app.get('/api/admin/scores', authenticateToken, authorizeAdmin, async (req, res)
 
 // Player route to get their own score
 app.get('/api/scores/me', authenticateToken, async (req, res) => {
-    const username = req.user.username; // Get the username from the token
+    const username = req.user.username;
 
     try {
         const score = await Score.findOne({ username });
@@ -309,6 +337,21 @@ app.delete('/api/scores/:username', authenticateToken, authorizeAdmin, async (re
         res.send({ message: 'Score deleted successfully' });
     } catch (error) {
         res.status(500).send({ error: 'An error occurred while deleting the score' });
+    }
+});
+
+// User delete route for admin
+app.delete('/api/users/:username', authenticateToken, authorizeAdmin, async (req, res) => {
+    const { username } = req.params;
+
+    try {
+        const result = await User.deleteOne({ username });
+        if (result.deletedCount === 0) {
+            return res.status(404).send({ error: 'User  not found' });
+        }
+        res.send({ message: 'User  deleted successfully' });
+    } catch (error) {
+        res.status(500).send({ error: 'An error occurred while deleting the user' });
     }
 });
 
